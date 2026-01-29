@@ -36,10 +36,10 @@ function install_maven {
 
 function install_hadoop {
   echo "Installing Hadoop..."
-  
+
   apt-get update -y
   apt-get install -y curl tar gzip
-  
+
   local HADOOP_VERSION=3.3.6
   curl -fsSL -o hadoop.tgz "https://archive.apache.org/dist/hadoop/common/hadoop-${HADOOP_VERSION}/hadoop-${HADOOP_VERSION}.tar.gz"
   tar -xzf hadoop.tgz --no-same-owner --no-same-permissions
@@ -123,6 +123,64 @@ EOF
   done
 
   "$HADOOP_HOME/bin/hdfs" dfs -ls /
+}
+
+function install_minio {
+  echo "Installing MinIO..."
+
+  apt-get update -y
+  apt-get install -y curl
+
+  curl -fsSL -o /usr/local/bin/minio https://dl.min.io/server/minio/release/linux-amd64/minio
+  chmod +x /usr/local/bin/minio
+
+  curl -fsSL -o /usr/local/bin/mc https://dl.min.io/client/mc/release/linux-amd64/mc
+  chmod +x /usr/local/bin/mc
+
+  echo "MinIO installed successfully"
+}
+
+function setup_minio {
+  echo "Setting up MinIO S3-compatible service..."
+
+  # Download S3 JARs to Spark jars directory
+  SPARK_JARS_DIR="/opt/shims/spark35/spark_home/assembly/target/scala-2.12/jars"
+  wget -q https://repo1.maven.org/maven2/org/apache/hadoop/hadoop-aws/3.3.2/hadoop-aws-3.3.2.jar -P "$SPARK_JARS_DIR"
+  wget -q https://repo1.maven.org/maven2/com/amazonaws/aws-java-sdk-bundle/1.12.788/aws-java-sdk-bundle-1.12.788.jar -P "$SPARK_JARS_DIR"
+
+
+  export MINIO_DATA_DIR="${RUNNER_TEMP:-/tmp}/minio-data"
+  mkdir -p "$MINIO_DATA_DIR"
+
+
+  export MINIO_ROOT_USER=admin
+  export MINIO_ROOT_PASSWORD=admin123
+  export MINIO_ADDRESS=":9100"
+  export MINIO_CONSOLE_ADDRESS=":9101"
+
+  if [ -n "${GITHUB_ENV:-}" ]; then
+    echo "MINIO_ROOT_USER=$MINIO_ROOT_USER" >> "$GITHUB_ENV"
+    echo "MINIO_ROOT_PASSWORD=$MINIO_ROOT_PASSWORD" >> "$GITHUB_ENV"
+  fi
+  nohup minio server --address "$MINIO_ADDRESS" --console-address "$MINIO_CONSOLE_ADDRESS" "$MINIO_DATA_DIR" > /tmp/minio.log 2>&1 &
+
+  for i in {1..60}; do
+    curl -sSf http://localhost:9100/minio/health/ready >/dev/null 2>&1 && break
+    sleep 1
+  done
+
+  if ! curl -sSf http://localhost:9100/minio/health/ready >/dev/null 2>&1; then
+    echo "MinIO failed to start. Logs:"
+    cat /tmp/minio.log || true
+    exit 1
+  fi
+
+  # Configure MinIO client and create test bucket
+  mc alias set s3local http://localhost:9100 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD"
+  mc mb -p s3local/gluten-it || true
+
+  echo "MinIO S3 service started on http://localhost:9100"
+  echo "Test bucket 'gluten-it' created"
 }
 for cmd in "$@"
 do

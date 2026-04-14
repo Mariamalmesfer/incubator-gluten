@@ -1580,6 +1580,65 @@ abstract class ScalarFunctionsValidateSuite extends FunctionsValidateSuite {
     }
   }
 
+  testWithMinSparkVersion("make_timestamp_ntz with validation enabled", "3.4") {
+    withSQLConf("spark.gluten.sql.columnar.backend.velox.enableTimestampNtzValidation" -> "true") {
+      val df = spark.sql(
+        "SELECT l_orderkey, make_timestamp_ntz(2024, 5, 22, 10, 30, 0.0) FROM lineitem LIMIT 1")
+      checkFallbackOperators(df, 1)
+      df.collect()
+    }
+  }
+
+  testWithMinSparkVersion("make_timestamp_ntz with validation disabled", "3.4") {
+    withSQLConf("spark.gluten.sql.columnar.backend.velox.enableTimestampNtzValidation" -> "false") {
+      val df = spark.sql(
+        "SELECT l_orderkey, make_timestamp_ntz(2024, 5, 22, 10, 30, 0.0) FROM lineitem LIMIT 1")
+      val optimizedPlan = df.queryExecution.optimizedPlan.toString()
+      checkGlutenPlan[ProjectExecTransformer](df)
+      checkFallbackOperators(df, 0)
+      df.collect()
+    }
+  }
+
+  testWithMinSparkVersion("try_make_timestamp_ntz with validation enabled", "3.4") {
+    withSQLConf("spark.gluten.sql.columnar.backend.velox.enableTimestampNtzValidation" -> "true") {
+      withTempView("try_make_timestamp_ntz_tbl") {
+        Seq(
+          (2017, 7, 11, 6, 30, 0.0),
+          (2024, 5, 22, 10, 30, 0.0),
+          (1, 1, 1, 1, 1, null.asInstanceOf[java.lang.Double])
+        ).toDF("year", "month", "day", "hour", "min", "sec")
+          .createOrReplaceTempView("try_make_timestamp_ntz_tbl")
+
+        val df = spark.sql(
+          "SELECT try_make_timestamp_ntz(year, month, day, hour, min, sec) " +
+            "FROM try_make_timestamp_ntz_tbl")
+        checkFallbackOperators(df, 1)
+        df.collect()
+      }
+    }
+  }
+
+  testWithMinSparkVersion("try_make_timestamp_ntz with validation disabled", "3.4") {
+    withSQLConf("spark.gluten.sql.columnar.backend.velox.enableTimestampNtzValidation" -> "false") {
+      withTempView("try_make_timestamp_ntz_tbl") {
+        Seq(
+          (2017, 7, 11, 6, 30, 0.0),
+          (2024, 5, 22, 10, 30, 0.0),
+          (1, 1, 1, 1, 1, null.asInstanceOf[java.lang.Double])
+        ).toDF("year", "month", "day", "hour", "min", "sec")
+          .createOrReplaceTempView("try_make_timestamp_ntz_tbl")
+
+        val df = spark.sql(
+          "SELECT try_make_timestamp_ntz(year, month, day, hour, min, sec) " +
+            "FROM try_make_timestamp_ntz_tbl")
+        checkGlutenPlan[ProjectExecTransformer](df)
+        checkFallbackOperators(df, 0)
+        df.collect()
+      }
+    }
+  }
+
   testWithMinSparkVersion("localtimestamp with validation enabled", "3.4") {
     // With validation enabled (default), localtimestamp should fallback to Spark
     // because it returns TimestampNTZType

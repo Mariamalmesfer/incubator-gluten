@@ -16,7 +16,7 @@
  */
 package org.apache.gluten.functions
 
-import org.apache.gluten.execution.ProjectExecTransformer
+import org.apache.gluten.execution.{BatchScanExecTransformer, ProjectExecTransformer}
 
 import org.apache.spark.sql.execution.ProjectExec
 import org.apache.spark.sql.types.Decimal
@@ -218,6 +218,59 @@ class DateFunctionsValidateSuite extends FunctionsValidateSuite {
     }
   }
 
+  test("make_timestamp_ntz") {
+    withTempPath {
+      path =>
+        Seq(
+          (2017, 7, 11, 6, 30, Decimal(45678000, 18, 6)),
+          (1, 1, 1, 1, 1, Decimal(1, 18, 6)),
+          (1, 1, 1, 1, 1, null)
+        )
+          .toDF("year", "month", "day", "hour", "min", "sec")
+          .write
+          .parquet(path.getCanonicalPath)
+
+        spark.read
+          .parquet(path.getCanonicalPath)
+          .createOrReplaceTempView("make_timestamp_ntz_tbl")
+
+        runQueryAndCompare(
+          "select make_timestamp_ntz(year, month, day, hour, min, sec) " +
+            "from make_timestamp_ntz_tbl") {
+          checkGlutenPlan[BatchScanExecTransformer]
+        }
+    }
+  }
+
+  test("try_make_timestamp_ntz") {
+    val tryMakeTimestampNtzAvailable =
+      spark.catalog.listFunctions().collect().exists(_.name.equalsIgnoreCase("try_make_timestamp_ntz"))
+
+    if (tryMakeTimestampNtzAvailable) {
+      withTempPath {
+        path =>
+          Seq(
+            (2017, 7, 11, 6, 30, Decimal(45678000, 18, 6)),
+            (1, 1, 1, 1, 1, Decimal(1, 18, 6)),
+            (1, 1, 1, 1, 1, null)
+          )
+            .toDF("year", "month", "day", "hour", "min", "sec")
+            .write
+            .parquet(path.getCanonicalPath)
+
+          spark.read
+            .parquet(path.getCanonicalPath)
+            .createOrReplaceTempView("try_make_timestamp_ntz_tbl")
+
+          runQueryAndCompare(
+            "select try_make_timestamp_ntz(year, month, day, hour, min, sec) from " +
+              "try_make_timestamp_ntz_tbl") {
+            checkGlutenPlan[BatchScanExecTransformer]
+          }
+      }
+    }
+  }
+
   test("make_ym_interval") {
     runQueryAndCompare("select make_ym_interval(1, 1)") {
       checkGlutenPlan[ProjectExecTransformer]
@@ -322,6 +375,21 @@ class DateFunctionsValidateSuite extends FunctionsValidateSuite {
         spark.read.parquet(path.getCanonicalPath).createOrReplaceTempView("time")
         runQueryAndCompare("select to_timestamp(t, 'yyyy-MM') from time") {
           checkGlutenPlan[ProjectExecTransformer]
+        }
+    }
+  }
+
+  test("to_timestamp_ntz") {
+    withTempPath {
+      path =>
+        val t1 = "2015-07-22 10:00:00"
+        val t2 = "2014-12-31 23:59:59"
+        val t3 = "2014-12-31 23:59:58"
+        Seq(t1, t2, t3).toDF("t").write.parquet(path.getCanonicalPath)
+
+        spark.read.parquet(path.getCanonicalPath).createOrReplaceTempView("time")
+        runQueryAndCompare("select to_timestamp_ntz(t, 'yyyy-MM-dd HH:mm:ss') from time") {
+          checkGlutenPlan[BatchScanExecTransformer]
         }
     }
   }

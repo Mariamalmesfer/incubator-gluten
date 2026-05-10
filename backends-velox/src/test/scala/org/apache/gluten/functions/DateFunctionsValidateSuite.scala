@@ -599,12 +599,14 @@ class DateFunctionsValidateSuite extends FunctionsValidateSuite {
           checkGlutenPlan[BatchScanExecTransformer]
         }
 
-        // Ensures the fallback of unsupported function works.
-        runQueryAndCompare("select hour(ts) from view") {
-          df =>
-            assert(collect(df.queryExecution.executedPlan) {
-              case p if p.isInstanceOf[ProjectExec] => p
-            }.nonEmpty)
+        // cast(string as timestamp_ntz) runs natively.
+        // Must use a file-backed scan so Gluten has a native leaf to offload the Project above.
+        val strPath = dir.getAbsolutePath + "/str_data"
+        spark.createDataset(inputs).toDF("str")
+          .coalesce(1).write.mode("overwrite").parquet(strPath)
+        spark.read.parquet(strPath).createOrReplaceTempView("str_view")
+        runQueryAndCompare("select cast(str as timestamp_ntz) from str_view") {
+          checkGlutenPlan[ProjectExecTransformer]
         }
     }
   }

@@ -25,6 +25,7 @@ import org.apache.gluten.extension.columnar.offload.OffloadSingleNode
 import org.apache.gluten.sql.shims.SparkShimLoader
 
 import org.apache.spark.internal.Logging
+import org.apache.spark.sql.catalyst.expressions.Cast
 import org.apache.spark.sql.execution._
 import org.apache.spark.sql.execution.aggregate.{HashAggregateExec, ObjectHashAggregateExec, SortAggregateExec}
 import org.apache.spark.sql.execution.datasources.WriteFilesExec
@@ -33,7 +34,7 @@ import org.apache.spark.sql.execution.exchange.{BroadcastExchangeExec, ShuffleEx
 import org.apache.spark.sql.execution.joins._
 import org.apache.spark.sql.execution.window.WindowExec
 import org.apache.spark.sql.hive.HiveTableScanExecTransformer
-import org.apache.spark.sql.types.{ArrayType, DataType, MapType, StructType}
+import org.apache.spark.sql.types.{ArrayType, DataType, MapType, StringType, StructType}
 
 object Validators {
   implicit class ValidatorBuilderImplicits(builder: Validator.Builder) {
@@ -262,9 +263,23 @@ object Validators {
           case p if HiveTableScanExecTransformer.isHiveTableScan(p) => true
           case _ => false
         }
-        val hasNTZ = plan.output.exists(a => containsNTZ(a.dataType)) ||
-          plan.children.exists(_.output.exists(a => containsNTZ(a.dataType)))
-        if (isScan || !hasNTZ) {
+        // Allow: scans, NTZ-consuming ops (e.g. hour(timestamp_ntz)->int),
+        // and explicit cast(varchar as timestamp_ntz). Fall back for everything else
+        // that produces NTZ output (literals, pass-through, unknown conversions).
+        val inputHasNTZ = plan.children.exists(_.output.exists(a => containsNTZ(a.dataType)))
+        val outputHasNTZ = plan.output.exists(a => containsNTZ(a.dataType))
+        val isVarcharToNtzCast = !inputHasNTZ && outputHasNTZ && (plan match {
+          case p: ProjectExec =>
+            p.projectList.forall {
+              expr =>
+                !containsNTZ(expr.dataType) || (expr match {
+                  case c: Cast => c.child.dataType == StringType
+                  case _ => false
+                })
+            }
+          case _ => false
+        })
+        if (isScan || !outputHasNTZ || isVarcharToNtzCast) {
           return pass()
         }
       }

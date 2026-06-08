@@ -262,9 +262,11 @@ object Validators {
           case p if HiveTableScanExecTransformer.isHiveTableScan(p) => true
           case _ => false
         }
-        val hasNTZ = plan.output.exists(a => containsNTZ(a.dataType)) ||
-          plan.children.exists(_.output.exists(a => containsNTZ(a.dataType)))
-        if (isScan || !hasNTZ) {
+        // Only fall back when the plan itself produces NTZ output.
+        // Plans that consume NTZ input without producing NTZ output
+        // (e.g. cast(timestamp_ntz as string)) are safe to run natively.
+        val outputHasNTZ = plan.output.exists(a => containsNTZ(a.dataType))
+        if (isScan || !outputHasNTZ) {
           return pass()
         }
       }

@@ -25,7 +25,8 @@ import org.apache.gluten.extension.columnar.offload.OffloadSingleNode
 import org.apache.gluten.sql.shims.SparkShimLoader
 
 import org.apache.spark.internal.Logging
-import org.apache.spark.sql.catalyst.expressions.{Cast, ConvertTimezone, Hour, Minute, Second, TimestampAdd}
+import org.apache.spark.sql.catalyst.expressions.{Cast, ConvertTimezone, Hour, Lag, Lead, Minute, NthValue, Second, TimestampAdd}
+import org.apache.spark.sql.catalyst.expressions.aggregate.{Count, First, Last, Max, Min}
 import org.apache.spark.sql.execution._
 import org.apache.spark.sql.execution.aggregate.{HashAggregateExec, ObjectHashAggregateExec, SortAggregateExec}
 import org.apache.spark.sql.execution.datasources.WriteFilesExec
@@ -289,10 +290,21 @@ object Validators {
                 }
             }
           case w: WindowExec =>
-            // Only windowExpression is unverified for NTZ; sort/partition keys are safe.
-            !w.windowExpression.exists {
+            w.windowExpression.forall {
               expr =>
-                containsNTZ(expr.dataType) || expr.references.exists(a => containsNTZ(a.dataType))
+                (!containsNTZ(expr.dataType) &&
+                  !expr.references.exists(a => containsNTZ(a.dataType))) ||
+                expr.exists {
+                  case Lag(input, _, _, _) => containsNTZ(input.dataType)
+                  case Lead(input, _, _, _) => containsNTZ(input.dataType)
+                  case NthValue(input, _, _) => containsNTZ(input.dataType)
+                  case First(child, _) => containsNTZ(child.dataType)
+                  case Last(child, _) => containsNTZ(child.dataType)
+                  case Count(children) => children.exists(c => containsNTZ(c.dataType))
+                  case Min(child) => containsNTZ(child.dataType)
+                  case Max(child) => containsNTZ(child.dataType)
+                  case _ => false
+                }
             }
           case _ => false
         }

@@ -92,4 +92,47 @@ class WindowFunctionsValidateSuite extends FunctionsValidateSuite {
       }
     }
   }
+
+  test("window partition/order by TIMESTAMP_NTZ goes native") {
+    withTable("ntz_window_data") {
+      spark
+        .sql("""
+               |select * from values
+               |  (1, TIMESTAMP_NTZ '2024-01-01 00:00:00', 10),
+               |  (1, TIMESTAMP_NTZ '2024-01-02 00:00:00', 20),
+               |  (2, TIMESTAMP_NTZ '2024-01-01 00:00:00', 30)
+               |as t(k, ts, v)
+            """.stripMargin)
+        .write
+        .saveAsTable("ntz_window_data")
+
+      runQueryAndCompare(
+        "select k, ts, rank() over (partition by k order by ts) as rnk " +
+          "from ntz_window_data") {
+        checkGlutenPlan[WindowExecTransformer]
+      }
+    }
+  }
+
+  test("window function argument with TIMESTAMP_NTZ falls back") {
+    withTable("ntz_window_data") {
+      spark
+        .sql("""
+               |select * from values
+               |  (1, TIMESTAMP_NTZ '2024-01-01 00:00:00', 10),
+               |  (1, TIMESTAMP_NTZ '2024-01-02 00:00:00', 20),
+               |  (2, TIMESTAMP_NTZ '2024-01-01 00:00:00', 30)
+               |as t(k, ts, v)
+            """.stripMargin)
+        .write
+        .saveAsTable("ntz_window_data")
+
+      val df = spark.sql(
+        "select k, lag(ts, 1) over (partition by k order by v) " +
+          "from ntz_window_data")
+      // TODO: 1 is a structural estimate, verify against a real build before
+      // this PR is marked ready for review.
+      checkFallbackOperators(df, 1)
+    }
+  }
 }

@@ -288,6 +288,12 @@ object Validators {
                   case _ => false
                 }
             }
+          case w: WindowExec =>
+            // Only windowExpression is unverified for NTZ; sort/partition keys are safe.
+            !w.windowExpression.exists {
+              expr =>
+                containsNTZ(expr.dataType) || expr.references.exists(a => containsNTZ(a.dataType))
+            }
           case _ => false
         }
         if (isScan || isSupportedNtz) {
